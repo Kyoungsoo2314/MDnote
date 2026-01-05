@@ -999,6 +999,53 @@ class MarkdownViewer:
             foreground=self.colors['checkbox']
         )
 
+    def insert_code_block_with_copy(self, text_widget, code_lines, lang=""):
+        """코드 블록을 복사 버튼과 함께 삽입"""
+        code_text = '\n'.join(code_lines)
+
+        # 코드 블록 헤더 (언어 + 복사 버튼)
+        header_frame = tk.Frame(text_widget, bg=self.colors['code_bg'])
+
+        # 언어 라벨
+        if lang:
+            lang_label = tk.Label(
+                header_frame,
+                text=lang,
+                bg=self.colors['code_bg'],
+                fg=self.colors['quote'],
+                font=("Consolas", 9)
+            )
+            lang_label.pack(side=tk.LEFT, padx=5)
+
+        # 복사 버튼
+        def copy_code():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(code_text)
+            copy_btn.config(text="Copied!")
+            self.root.after(1500, lambda: copy_btn.config(text="Copy"))
+
+        copy_btn = tk.Button(
+            header_frame,
+            text="Copy",
+            command=copy_code,
+            bg=self.colors['tree_bg'],
+            fg=self.colors['fg'],
+            font=("Consolas", 8),
+            relief=tk.FLAT,
+            padx=8,
+            pady=2,
+            cursor="hand2"
+        )
+        copy_btn.pack(side=tk.RIGHT, padx=5, pady=2)
+
+        # 헤더 프레임 삽입
+        text_widget.window_create(tk.END, window=header_frame)
+        text_widget.insert(tk.END, '\n')
+
+        # 코드 내용 삽입
+        for line in code_lines:
+            text_widget.insert(tk.END, line + '\n', "code_block")
+
     def render_markdown(self, text_widget, content):
         """마크다운 렌더링"""
         text_widget.config(state=tk.NORMAL)
@@ -1006,17 +1053,26 @@ class MarkdownViewer:
 
         lines = content.split('\n')
         in_code_block = False
+        code_block_content = []
+        code_block_lang = ""
 
         for line in lines:
             # 코드 블록 토글
             if line.strip().startswith('```'):
-                in_code_block = not in_code_block
-                text_widget.insert(tk.END, line + '\n', "code_block")
+                if not in_code_block:
+                    # 코드 블록 시작
+                    in_code_block = True
+                    code_block_lang = line.strip()[3:]  # 언어 추출
+                    code_block_content = []
+                else:
+                    # 코드 블록 끝 - 복사 버튼과 함께 렌더링
+                    in_code_block = False
+                    self.insert_code_block_with_copy(text_widget, code_block_content, code_block_lang)
                 continue
 
             # 코드 블록 내부
             if in_code_block:
-                text_widget.insert(tk.END, line + '\n', "code_block")
+                code_block_content.append(line)
                 continue
 
             # 수평선
