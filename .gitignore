@@ -1,0 +1,22 @@
+# Build outputs
+dist/
+build/
+*.spec
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Installer outputs
+*.exe
+설치파일/
+
+# Temp files
+*.log
+nul
+
+# IDE
+.vscode/
+.idea/
+mdnote_installer.sed
