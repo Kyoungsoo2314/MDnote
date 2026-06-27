@@ -1046,6 +1046,109 @@ class MarkdownViewer:
         for line in code_lines:
             text_widget.insert(tk.END, line + '\n', "code_block")
 
+    def strip_inline(self, text):
+        """테이블 셀 표시용 인라인 마크다운 마커 제거"""
+        text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+        text = re.sub(r'__(.+?)__', r'\1', text)
+        text = re.sub(r'~~(.+?)~~', r'\1', text)
+        text = re.sub(r'`(.+?)`', r'\1', text)
+        text = re.sub(r'\*(.+?)\*', r'\1', text)
+        return text.strip()
+
+    def parse_table(self, lines, start):
+        """start 위치에서 GFM 테이블 블록 파싱.
+
+        (rows, aligns, end_index) 반환 또는 테이블이 아니면 None.
+        rows[0]은 헤더 행, end_index는 테이블 다음 줄 인덱스.
+        """
+        header = lines[start]
+        if '|' not in header:
+            return None
+        if start + 1 >= len(lines):
+            return None
+
+        separator = lines[start + 1].strip()
+        # 구분선: 파이프 / 대시 / 콜론 / 공백으로만 구성, 대시 1개 이상
+        if not re.match(r'^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$', separator):
+            return None
+
+        def split_row(row):
+            row = row.strip()
+            row = row.replace('\\|', '\x00')  # 이스케이프된 파이프 보호
+            if row.startswith('|'):
+                row = row[1:]
+            if row.endswith('|'):
+                row = row[:-1]
+            return [c.strip().replace('\x00', '|') for c in row.split('|')]
+
+        # 정렬 파싱
+        aligns = []
+        for cell in split_row(separator):
+            left = cell.startswith(':')
+            right = cell.endswith(':')
+            if left and right:
+                aligns.append('center')
+            elif right:
+                aligns.append('right')
+            else:
+                aligns.append('left')
+
+        rows = [split_row(header)]
+        i = start + 2
+        while i < len(lines):
+            line = lines[i]
+            if '|' not in line or line.strip() == '':
+                break
+            rows.append(split_row(line))
+            i += 1
+
+        return rows, aligns, i
+
+    def insert_table(self, text_widget, rows, aligns):
+        """테이블을 테두리가 있는 격자 셀로 삽입 (Obsidian 스타일)"""
+        border = self.colors['hr']
+        table_frame = tk.Frame(text_widget, bg=border)
+
+        num_cols = max(len(r) for r in rows)
+        anchor_map = {'left': 'w', 'center': 'center', 'right': 'e'}
+        justify_map = {'left': tk.LEFT, 'center': tk.CENTER, 'right': tk.RIGHT}
+
+        for r, row in enumerate(rows):
+            is_header = (r == 0)
+            cell_bg = self.colors['code_bg'] if is_header else self.colors['bg']
+            cell_font = ("맑은 고딕", self.font_size, "bold") if is_header \
+                else ("맑은 고딕", self.font_size)
+
+            for c in range(num_cols):
+                cell_text = self.strip_inline(row[c]) if c < len(row) else ''
+                align = aligns[c] if c < len(aligns) else 'left'
+
+                label = tk.Label(
+                    table_frame,
+                    text=cell_text,
+                    bg=cell_bg,
+                    fg=self.colors['fg'],
+                    font=cell_font,
+                    anchor=anchor_map[align],
+                    justify=justify_map[align],
+                    padx=12,
+                    pady=6
+                )
+                # 1px 간격으로 테두리 색이 비쳐 격자선처럼 보이게 함
+                label.grid(row=r, column=c, sticky='nsew',
+                           padx=(1, 0), pady=(1, 0))
+
+        # 우측/하단 외곽선용 1px 여백
+        for c in range(num_cols):
+            table_frame.grid_columnconfigure(c, weight=1, pad=0)
+        spacer_r = tk.Frame(table_frame, bg=border, height=1)
+        spacer_r.grid(row=len(rows), column=0, columnspan=num_cols, sticky='ew')
+        spacer_c = tk.Frame(table_frame, bg=border, width=1)
+        spacer_c.grid(row=0, column=num_cols, rowspan=len(rows) + 1, sticky='ns')
+
+        text_widget.window_create(tk.END, window=table_frame)
+        text_widget.insert(tk.END, '\n')
+
     def render_markdown(self, text_widget, content):
         """마크다운 렌더링"""
         text_widget.config(state=tk.NORMAL)
@@ -1056,7 +1159,10 @@ class MarkdownViewer:
         code_block_content = []
         code_block_lang = ""
 
-        for line in lines:
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+
             # 코드 블록 토글
             if line.strip().startswith('```'):
                 if not in_code_block:
@@ -1068,16 +1174,27 @@ class MarkdownViewer:
                     # 코드 블록 끝 - 복사 버튼과 함께 렌더링
                     in_code_block = False
                     self.insert_code_block_with_copy(text_widget, code_block_content, code_block_lang)
+                i += 1
                 continue
 
             # 코드 블록 내부
             if in_code_block:
                 code_block_content.append(line)
+                i += 1
+                continue
+
+            # 테이블 (코드 블록 밖에서만)
+            table = self.parse_table(lines, i)
+            if table:
+                rows, aligns, end = table
+                self.insert_table(text_widget, rows, aligns)
+                i = end
                 continue
 
             # 수평선
             if re.match(r'^[-*_]{3,}$', line.strip()):
                 text_widget.insert(tk.END, '─' * 50 + '\n', "hr")
+                i += 1
                 continue
 
             # 제목 (H1-H6)
@@ -1087,11 +1204,13 @@ class MarkdownViewer:
                 text = heading_match.group(2)
                 tag = f"h{level}"
                 text_widget.insert(tk.END, text + '\n', tag)
+                i += 1
                 continue
 
             # 인용
             if line.startswith('> '):
                 text_widget.insert(tk.END, line[2:] + '\n', "blockquote")
+                i += 1
                 continue
 
             # 체크박스 리스트
@@ -1102,20 +1221,24 @@ class MarkdownViewer:
                 checkbox_symbol = '☑' if check.lower() == 'x' else '☐'
                 text_widget.insert(tk.END, checkbox_symbol + ' ', "checkbox")
                 self.insert_formatted_text(text_widget, item_content, base_tag="list")
+                i += 1
                 continue
 
             # 순서 있는 리스트
             if re.match(r'^\s*\d+\.\s+', line):
                 self.insert_list_item(text_widget, line)
+                i += 1
                 continue
 
             # 순서 없는 리스트
             if re.match(r'^\s*[-*+]\s+', line):
                 self.insert_list_item(text_widget, line)
+                i += 1
                 continue
 
             # 일반 텍스트
             self.insert_formatted_text(text_widget, line)
+            i += 1
 
         text_widget.config(state=tk.DISABLED)
 
