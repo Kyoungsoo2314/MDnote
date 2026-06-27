@@ -1301,9 +1301,9 @@ class MarkdownViewer:
                 i += 1
                 continue
 
-            # 인용
+            # 인용 (인용문 안에서도 굵게/코드 등 인라인 서식 처리)
             if line.startswith('> '):
-                text_widget.insert(tk.END, line[2:] + '\n', "blockquote")
+                self.insert_formatted_text(text_widget, line[2:], base_tag="blockquote")
                 i += 1
                 continue
 
@@ -1363,34 +1363,37 @@ class MarkdownViewer:
         text_widget.insert(tk.END, '\n')
 
     def process_inline_formatting(self, text_widget, text, base_tag=None):
-        """인라인 포맷팅 처리"""
-        if '`' in text:
-            parts = text.split('`')
-            for i, part in enumerate(parts):
-                if i % 2 == 0:
-                    self.insert_bold_italic(text_widget, part, base_tag)
-                else:
-                    text_widget.insert(tk.END, part, "code")
-        else:
-            self.insert_bold_italic(text_widget, text, base_tag)
+        """인라인 포맷팅 처리.
 
-    def insert_bold_italic(self, text_widget, text, base_tag=None):
-        """굵게, 기울임 처리"""
-        bold_pattern = r'\*\*(.+?)\*\*|__(.+?)__'
+        굵게(**..**, __..__)와 인라인 코드(`..`)를 함께 처리한다. 굵게가 코드를
+        감싸는 경우(예: **`Command`**)도 마커가 그대로 노출되지 않도록 굵게를
+        먼저 토큰화하고, 굵게 영역 안의 코드는 굵게+코드로 표시한다.
+        """
+        # 굵게 또는 코드 토큰을 순서대로 추출
+        token = re.compile(r'\*\*.+?\*\*|__.+?__|`[^`]*`')
+        pos = 0
+        for m in token.finditer(text):
+            if m.start() > pos:
+                text_widget.insert(tk.END, text[pos:m.start()], base_tag)
+            tok = m.group()
+            if tok.startswith('`'):
+                text_widget.insert(tk.END, tok[1:-1], "code")
+            else:
+                self.insert_bold_italic(text_widget, tok[2:-2])
+            pos = m.end()
+        if pos < len(text):
+            text_widget.insert(tk.END, text[pos:], base_tag)
 
-        last_end = 0
-        for match in re.finditer(bold_pattern, text):
-            if match.start() > last_end:
-                tag = base_tag if base_tag else None
-                text_widget.insert(tk.END, text[last_end:match.start()], tag)
-
-            bold_text = match.group(1) or match.group(2)
-            text_widget.insert(tk.END, bold_text, "bold")
-            last_end = match.end()
-
-        if last_end < len(text):
-            tag = base_tag if base_tag else None
-            text_widget.insert(tk.END, text[last_end:], tag)
+    def insert_bold_italic(self, text_widget, text):
+        """굵게 영역 삽입. 내부의 `코드`는 굵게+코드로 표시."""
+        parts = re.split(r'(`[^`]*`)', text)
+        for p in parts:
+            if not p:
+                continue
+            if len(p) >= 2 and p.startswith('`') and p.endswith('`'):
+                text_widget.insert(tk.END, p[1:-1], ("bold", "code"))
+            else:
+                text_widget.insert(tk.END, p, "bold")
 
 
 def main():
