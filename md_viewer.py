@@ -241,6 +241,9 @@ class MarkdownViewer:
                   foreground=[('selected', self.colors['fg'])],
                   expand=[('selected', [0, 0, 0, 2])])
 
+        # 탭 닫기(✕) 버튼 요소
+        self._setup_tab_close_element(style)
+
         # 트리뷰 스타일
         style.configure('Dark.Treeview',
                         background=self.colors['tree_bg'],
@@ -254,6 +257,46 @@ class MarkdownViewer:
         style.configure('Vertical.TScrollbar',
                         background=self.colors['tree_bg'],
                         troughcolor=self.colors['bg'])
+
+    def _draw_close_image(self, img, color):
+        """PhotoImage에 ✕ 모양을 그림 (투명 배경)"""
+        img.blank()
+        n = 16
+        for i in range(4, n - 4):
+            for off in (0, 1):
+                img.put(color, to=(i + off, i))
+                img.put(color, to=(i + off, n - 1 - i))
+
+    def _setup_tab_close_element(self, style):
+        """탭에 클릭 가능한 ✕ 닫기 버튼 요소를 설정 (테마 색 반영)"""
+        if not hasattr(self, '_close_img'):
+            self._close_img = tk.PhotoImage(name='mdnote_tab_close', width=16, height=16)
+            self._close_img_active = tk.PhotoImage(name='mdnote_tab_close_active', width=16, height=16)
+        # 테마 색으로 다시 그림
+        self._draw_close_image(self._close_img, self.colors['quote'])
+        self._draw_close_image(self._close_img_active, self.colors['emphasis'])
+
+        # 이미지 요소는 한 번만 생성
+        if not getattr(self, '_close_element_created', False):
+            try:
+                style.element_create('tabclose', 'image', self._close_img,
+                                     ('active', self._close_img_active), sticky='')
+                self._close_element_created = True
+            except tk.TclError:
+                self._close_element_created = False
+
+        # 라벨 옆에 ✕ 배치
+        if getattr(self, '_close_element_created', False):
+            style.layout('Custom.TNotebook.Tab', [
+                ('Custom.TNotebook.tab', {'sticky': 'nswe', 'children': [
+                    ('Custom.TNotebook.padding', {'side': 'top', 'sticky': 'nswe', 'children': [
+                        ('Custom.TNotebook.focus', {'side': 'top', 'sticky': 'nswe', 'children': [
+                            ('Custom.TNotebook.label', {'side': 'left', 'sticky': ''}),
+                            ('tabclose', {'side': 'left', 'sticky': ''}),
+                        ]})
+                    ]})
+                ]})
+            ])
 
     def create_ui(self):
         """UI 생성"""
@@ -330,6 +373,10 @@ class MarkdownViewer:
         # 탭 닫기 (마우스 중간 클릭)
         self.notebook.bind('<Button-2>', self.on_tab_middle_click)
 
+        # 탭 ✕ 버튼 클릭 감지
+        self.notebook.bind('<ButtonPress-1>', self.on_tab_close_press, add='+')
+        self.notebook.bind('<ButtonRelease-1>', self.on_tab_close_release, add='+')
+
         self.paned.add(self.content_frame, minsize=400)
 
     def create_status_bar(self):
@@ -378,6 +425,7 @@ class MarkdownViewer:
         self.update_recent_menu()
 
         file_menu.add_separator()
+        file_menu.add_command(label="새로고침 (F5)", command=self.reload_current_file)
         file_menu.add_command(label="저장 (Ctrl+S)", command=self.save_file)
         file_menu.add_separator()
         file_menu.add_command(label="탭 닫기 (Ctrl+W)", command=self.close_current_tab)
@@ -415,6 +463,8 @@ class MarkdownViewer:
         self.root.bind('<Control-e>', lambda e: self.toggle_edit_mode())
         self.root.bind('<Control-t>', lambda e: self.toggle_theme())
         self.root.bind('<Control-w>', lambda e: self.close_current_tab())
+        self.root.bind('<F5>', lambda e: self.reload_current_file())
+        self.root.bind('<Control-r>', lambda e: self.reload_current_file())
         self.root.bind('<Control-plus>', lambda e: self.increase_font_size())
         self.root.bind('<Control-equal>', lambda e: self.increase_font_size())
         self.root.bind('<Control-minus>', lambda e: self.decrease_font_size())
@@ -543,6 +593,38 @@ class MarkdownViewer:
                 self.close_current_tab()
         except:
             pass
+
+    def on_tab_close_press(self, event):
+        """탭 ✕ 버튼 누름 감지 (눌렀을 때 탭 전환은 막음)"""
+        self._close_press_index = None
+        if 'tabclose' in self.notebook.identify(event.x, event.y):
+            try:
+                self._close_press_index = self.notebook.index(f'@{event.x},{event.y}')
+            except tk.TclError:
+                self._close_press_index = None
+            return 'break'
+
+    def on_tab_close_release(self, event):
+        """탭 ✕ 버튼에서 떼면 그 탭을 닫음"""
+        idx = getattr(self, '_close_press_index', None)
+        if idx is None:
+            return
+        self._close_press_index = None
+        if 'tabclose' in self.notebook.identify(event.x, event.y):
+            try:
+                if self.notebook.index(f'@{event.x},{event.y}') == idx:
+                    self.close_tab_at_index(idx)
+            except tk.TclError:
+                pass
+
+    def close_tab_at_index(self, idx):
+        """인덱스로 탭 닫기 (선택 후 기존 닫기 로직 재사용)"""
+        try:
+            frame = self.notebook.nametowidget(self.notebook.tabs()[idx])
+        except (tk.TclError, IndexError):
+            return
+        self.notebook.select(frame)
+        self.close_current_tab()
 
     def next_tab(self):
         """다음 탭으로 이동"""
@@ -704,6 +786,55 @@ class MarkdownViewer:
 
         except Exception as e:
             messagebox.showerror("오류", f"파일 저장 실패:\n{str(e)}")
+
+    def reload_current_file(self):
+        """현재 탭의 파일을 디스크에서 다시 읽어 새로고침"""
+        tab = self.get_current_tab()
+        if not tab or not tab.file_path:
+            messagebox.showinfo("알림", "새로고침할 파일이 없습니다.")
+            return
+
+        if tab.has_unsaved_changes:
+            if not messagebox.askyesno(
+                "새로고침",
+                "저장되지 않은 변경사항이 사라집니다.\n계속할까요?"
+            ):
+                return
+
+        if not tab.file_path.exists():
+            messagebox.showerror("오류", f"파일을 찾을 수 없습니다:\n{tab.file_path}")
+            return
+
+        try:
+            with open(tab.file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except Exception as e:
+            messagebox.showerror("오류", f"새로고침 실패:\n{str(e)}")
+            return
+
+        # 스크롤 위치 유지
+        scroll_pos = tab.text_widget.yview()[0]
+
+        tab.content = content
+        tab.has_unsaved_changes = False
+
+        if tab.edit_mode:
+            # 편집 모드면 원문 텍스트로 갱신
+            tab.text_widget.config(state=tk.NORMAL)
+            tab.text_widget.delete(1.0, tk.END)
+            tab.text_widget.insert(1.0, content)
+        else:
+            self.render_markdown(tab.text_widget, content)
+
+        tab.text_widget.update_idletasks()
+        tab.text_widget.yview_moveto(scroll_pos)
+
+        self.update_title()
+        self.update_status_bar()
+
+        # 상태바 피드백
+        self.status_bar.config(text="↻ 새로고침됨")
+        self.root.after(1500, self.update_status_bar)
 
     # ===== 편집 모드 =====
 
