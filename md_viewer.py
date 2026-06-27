@@ -1038,7 +1038,8 @@ class MarkdownViewer:
         )
         copy_btn.pack(side=tk.RIGHT, padx=5, pady=2)
 
-        # 헤더 프레임 삽입
+        # 헤더 프레임 삽입 (크기를 미리 확정해야 Text가 공간을 올바르게 예약함)
+        header_frame.update_idletasks()
         text_widget.window_create(tk.END, window=header_frame)
         text_widget.insert(tk.END, '\n')
 
@@ -1113,6 +1114,15 @@ class MarkdownViewer:
         anchor_map = {'left': 'w', 'center': 'center', 'right': 'e'}
         justify_map = {'left': tk.LEFT, 'center': tk.CENTER, 'right': tk.RIGHT}
 
+        # 셀 자동 줄바꿈: 뷰어 폭을 열 수로 나눠 셀별 최대폭(픽셀)을 정함.
+        # 이 값을 넘는 내용은 잘리지 않고 여러 줄로 줄바꿈됨.
+        text_widget.update_idletasks()
+        avail = text_widget.winfo_width()
+        if avail <= 1:
+            avail = 900  # 최초 렌더 시 폭 미확정 대비 기본값
+        max_table = max(360, avail - 80)
+        cell_wrap = max(90, int(max_table / num_cols) - 2 * 12)
+
         for r, row in enumerate(rows):
             is_header = (r == 0)
             cell_bg = self.colors['code_bg'] if is_header else self.colors['bg']
@@ -1131,6 +1141,7 @@ class MarkdownViewer:
                     font=cell_font,
                     anchor=anchor_map[align],
                     justify=justify_map[align],
+                    wraplength=cell_wrap,
                     padx=12,
                     pady=6
                 )
@@ -1146,6 +1157,9 @@ class MarkdownViewer:
         spacer_c = tk.Frame(table_frame, bg=border, width=1)
         spacer_c.grid(row=0, column=num_cols, rowspan=len(rows) + 1, sticky='ns')
 
+        # 표 크기를 미리 확정해야 Text가 세로 공간을 올바르게 예약함
+        # (생략 시 표 아래로 스크롤이 내려가지 않음)
+        table_frame.update_idletasks()
         text_widget.window_create(tk.END, window=table_frame)
         text_widget.insert(tk.END, '\n')
 
