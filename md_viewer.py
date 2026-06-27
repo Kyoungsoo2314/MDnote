@@ -938,6 +938,21 @@ class MarkdownViewer:
             lmargin1=20,
             lmargin2=20
         )
+        # 코드 블록 헤더용 태그 (임베드 위젯 대신 텍스트로 표시 → 스크롤 성능 유지)
+        text_widget.tag_configure(
+            "code_lang",
+            font=("Consolas", code_size),
+            foreground=self.colors['quote'],
+            background=self.colors['code_bg']
+        )
+        text_widget.tag_configure(
+            "code_copy",
+            font=("Consolas", code_size, "bold"),
+            foreground=self.colors['link'],
+            background=self.colors['tree_bg'],
+            relief=tk.RAISED,
+            borderwidth=1
+        )
 
         # 링크
         text_widget.tag_configure(
@@ -1000,50 +1015,38 @@ class MarkdownViewer:
         )
 
     def insert_code_block_with_copy(self, text_widget, code_lines, lang=""):
-        """코드 블록을 복사 버튼과 함께 삽입"""
+        """코드 블록 삽입.
+
+        복사 버튼을 임베드 위젯(tk.Frame/Button) 대신 클릭 가능한 텍스트 태그로
+        구현한다. 코드블록이 수백 개인 대용량 문서에서 임베드 위젯이 많으면
+        스크롤이 끊기므로(위젯 재배치 비용), 위젯을 전혀 만들지 않는다.
+        """
         code_text = '\n'.join(code_lines)
 
-        # 코드 블록 헤더 (언어 + 복사 버튼)
-        header_frame = tk.Frame(text_widget, bg=self.colors['code_bg'])
+        # 헤더 줄: 언어 표시 + 클릭 가능한 Copy 링크
+        self._copy_seq = getattr(self, '_copy_seq', 0) + 1
+        btn_tag = f"copybtn_{self._copy_seq}"
 
-        # 언어 라벨
         if lang:
-            lang_label = tk.Label(
-                header_frame,
-                text=lang,
-                bg=self.colors['code_bg'],
-                fg=self.colors['quote'],
-                font=("Consolas", 9)
-            )
-            lang_label.pack(side=tk.LEFT, padx=5)
+            text_widget.insert(tk.END, f" {lang} ", "code_lang")
+            text_widget.insert(tk.END, "  ")
+        text_widget.insert(tk.END, " ⧉ Copy ", ("code_copy", btn_tag))
+        text_widget.insert(tk.END, "\n")
 
-        # 복사 버튼
-        def copy_code():
+        def do_copy(event, ct=code_text):
             self.root.clipboard_clear()
-            self.root.clipboard_append(code_text)
-            copy_btn.config(text="Copied!")
-            self.root.after(1500, lambda: copy_btn.config(text="Copy"))
+            self.root.clipboard_append(ct)
+            self.status_bar.config(text="✓ 코드 복사됨")
+            self.root.after(1500, self.update_status_bar)
+            return "break"
 
-        copy_btn = tk.Button(
-            header_frame,
-            text="Copy",
-            command=copy_code,
-            bg=self.colors['tree_bg'],
-            fg=self.colors['fg'],
-            font=("Consolas", 8),
-            relief=tk.FLAT,
-            padx=8,
-            pady=2,
-            cursor="hand2"
-        )
-        copy_btn.pack(side=tk.RIGHT, padx=5, pady=2)
+        text_widget.tag_bind(btn_tag, "<Button-1>", do_copy)
+        text_widget.tag_bind(btn_tag, "<Enter>",
+                             lambda e: text_widget.config(cursor="hand2"))
+        text_widget.tag_bind(btn_tag, "<Leave>",
+                             lambda e: text_widget.config(cursor=""))
 
-        # 헤더 프레임 삽입 (크기를 미리 확정해야 Text가 공간을 올바르게 예약함)
-        header_frame.update_idletasks()
-        text_widget.window_create(tk.END, window=header_frame)
-        text_widget.insert(tk.END, '\n')
-
-        # 코드 내용 삽입
+        # 코드 내용 삽입 (텍스트 태그만 사용)
         for line in code_lines:
             text_widget.insert(tk.END, line + '\n', "code_block")
 
