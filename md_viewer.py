@@ -954,6 +954,20 @@ class MarkdownViewer:
             borderwidth=1
         )
 
+        # 텍스트 기반 표 헤더/구분선
+        text_widget.tag_configure(
+            "tbl_head",
+            font=("맑은 고딕", self.font_size, "bold"),
+            foreground=self.colors['h3'],
+            background=self.colors['code_bg']
+        )
+        text_widget.tag_configure(
+            "tbl_sep",
+            foreground=self.colors['hr'],
+            lmargin1=24,
+            lmargin2=24
+        )
+
         # 링크
         text_widget.tag_configure(
             "link",
@@ -1109,61 +1123,124 @@ class MarkdownViewer:
         return rows, aligns, i
 
     def insert_table(self, text_widget, rows, aligns):
-        """테이블을 테두리가 있는 격자 셀로 삽입 (Obsidian 스타일)"""
-        border = self.colors['hr']
-        table_frame = tk.Frame(text_widget, bg=border)
+        """테이블을 텍스트 + 픽셀 탭스톱으로 삽입.
 
-        num_cols = max(len(r) for r in rows)
-        anchor_map = {'left': 'w', 'center': 'center', 'right': 'e'}
-        justify_map = {'left': tk.LEFT, 'center': tk.CENTER, 'right': tk.RIGHT}
+        임베드 위젯(tk.Frame/Label)을 쓰지 않으므로 표가 많아도 스크롤이
+        끊기지 않는다. 열 정렬은 Text 위젯의 픽셀 탭스톱으로 처리해 한글처럼
+        가변폭 글자도 정확히 정렬되고, 폭을 넘는 셀은 자동 줄바꿈한다.
+        """
+        from tkinter import font as tkfont
 
-        # 셀 자동 줄바꿈: 뷰어 폭을 열 수로 나눠 셀별 최대폭(픽셀)을 정함.
-        # 이 값을 넘는 내용은 잘리지 않고 여러 줄로 줄바꿈됨.
+        ncols = max(len(r) for r in rows)
+        grid = [[self.strip_inline(row[c]) if c < len(row) else ''
+                 for c in range(ncols)] for row in rows]
+        aligns = [(aligns[c] if c < len(aligns) else 'left') for c in range(ncols)]
+
+        body_font = tkfont.Font(family="맑은 고딕", size=self.font_size)
+        head_font = tkfont.Font(family="맑은 고딕", size=self.font_size, weight="bold")
+
+        # 열별 자연 폭(픽셀)
+        natural = []
+        for c in range(ncols):
+            w = 0
+            for r in range(len(grid)):
+                f = head_font if r == 0 else body_font
+                w = max(w, f.measure(grid[r][c]))
+            natural.append(w)
+
         text_widget.update_idletasks()
         avail = text_widget.winfo_width()
         if avail <= 1:
             avail = 900  # 최초 렌더 시 폭 미확정 대비 기본값
-        max_table = max(360, avail - 80)
-        cell_wrap = max(90, int(max_table / num_cols) - 2 * 12)
+        LM = 24    # 좌측 여백
+        PAD = 28   # 열 간격
+        usable = max(320, avail - LM - 40)
+        if sum(natural) + PAD * (ncols - 1) <= usable:
+            col_w = natural[:]
+        else:
+            cap = max(110, int((usable - PAD * (ncols - 1)) / ncols))
+            col_w = [min(n, cap) for n in natural]
+        col_w = [max(36, w) for w in col_w]
 
-        for r, row in enumerate(rows):
-            is_header = (r == 0)
-            cell_bg = self.colors['code_bg'] if is_header else self.colors['bg']
-            cell_font = ("맑은 고딕", self.font_size, "bold") if is_header \
-                else ("맑은 고딕", self.font_size)
+        # 열 좌측 좌표 + 탭스톱(정렬 포함)
+        xs = []
+        x = LM
+        for c in range(ncols):
+            xs.append(x)
+            x += col_w[c] + PAD
+        tabs = []
+        for c in range(ncols):
+            if aligns[c] == 'right':
+                tabs += [xs[c] + col_w[c], 'right']
+            elif aligns[c] == 'center':
+                tabs += [xs[c] + col_w[c] // 2, 'center']
+            else:
+                tabs += [xs[c], 'left']
 
-            for c in range(num_cols):
-                cell_text = self.strip_inline(row[c]) if c < len(row) else ''
-                align = aligns[c] if c < len(aligns) else 'left'
+        self._tbl_seq = getattr(self, '_tbl_seq', 0) + 1
+        tab_tag = f"tbltab_{self._tbl_seq}"
+        text_widget.tag_configure(tab_tag, tabs=tuple(tabs),
+                                  lmargin1=LM, lmargin2=LM, spacing1=2, spacing3=2)
 
-                label = tk.Label(
-                    table_frame,
-                    text=cell_text,
-                    bg=cell_bg,
-                    fg=self.colors['fg'],
-                    font=cell_font,
-                    anchor=anchor_map[align],
-                    justify=justify_map[align],
-                    wraplength=cell_wrap,
-                    padx=12,
-                    pady=6
-                )
-                # 1px 간격으로 테두리 색이 비쳐 격자선처럼 보이게 함
-                label.grid(row=r, column=c, sticky='nsew',
-                           padx=(1, 0), pady=(1, 0))
+        def wrap_cell(text, w, f):
+            """셀 내용을 폭 w(픽셀) 안에 들어가도록 줄바꿈 (단어 우선, 필요시 글자)"""
+            if not text:
+                return ['']
+            lines = []
+            cur = ''
+            for word in text.split(' '):
+                trial = word if cur == '' else cur + ' ' + word
+                if f.measure(trial) <= w or cur == '':
+                    if cur == '' and f.measure(word) > w:
+                        piece = ''
+                        for ch in word:
+                            if f.measure(piece + ch) <= w or piece == '':
+                                piece += ch
+                            else:
+                                lines.append(piece)
+                                piece = ch
+                        cur = piece
+                    else:
+                        cur = trial
+                else:
+                    lines.append(cur)
+                    cur = word
+                    if f.measure(cur) > w:
+                        piece = ''
+                        for ch in cur:
+                            if f.measure(piece + ch) <= w or piece == '':
+                                piece += ch
+                            else:
+                                lines.append(piece)
+                                piece = ch
+                        cur = piece
+            lines.append(cur)
+            return lines
 
-        # 우측/하단 외곽선용 1px 여백
-        for c in range(num_cols):
-            table_frame.grid_columnconfigure(c, weight=1, pad=0)
-        spacer_r = tk.Frame(table_frame, bg=border, height=1)
-        spacer_r.grid(row=len(rows), column=0, columnspan=num_cols, sticky='ew')
-        spacer_c = tk.Frame(table_frame, bg=border, width=1)
-        spacer_c.grid(row=0, column=num_cols, rowspan=len(rows) + 1, sticky='ns')
+        def emit_row(r, header):
+            f = head_font if header else body_font
+            line_tags = (tab_tag, "tbl_head") if header else (tab_tag,)
+            wrapped = [wrap_cell(grid[r][c], col_w[c], f) for c in range(ncols)]
+            maxl = max(len(wc) for wc in wrapped)
+            for k in range(maxl):
+                text_widget.insert(tk.END, '\t', line_tags)
+                for c in range(ncols):
+                    seg = wrapped[c][k] if k < len(wrapped[c]) else ''
+                    text_widget.insert(tk.END, seg, line_tags)
+                    if c < ncols - 1:
+                        text_widget.insert(tk.END, '\t', line_tags)
+                text_widget.insert(tk.END, '\n', line_tags)
 
-        # 표 크기를 미리 확정해야 Text가 세로 공간을 올바르게 예약함
-        # (생략 시 표 아래로 스크롤이 내려가지 않음)
-        table_frame.update_idletasks()
-        text_widget.window_create(tk.END, window=table_frame)
+        # 헤더
+        emit_row(0, header=True)
+        # 헤더 아래 가로 구분선
+        total_px = xs[-1] + col_w[-1] - LM
+        dash_px = body_font.measure('─') or 8
+        n_dash = max(10, int(total_px / dash_px))
+        text_widget.insert(tk.END, '─' * n_dash + '\n', "tbl_sep")
+        # 본문
+        for r in range(1, len(grid)):
+            emit_row(r, header=False)
         text_widget.insert(tk.END, '\n')
 
     def render_markdown(self, text_widget, content):
